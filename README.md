@@ -57,7 +57,7 @@ The network grew the way the post describes: run it, read a failure trace, write
 | `ppo.js` | PPO from scratch: `node ppo.js 25` trains for 25 minutes and writes `ppo.json` |
 | `space.js` | the black-and-white renderer shared by the page and the video |
 | `page.src.html`, `build.py` | the interactive page; `python3 build.py` writes `index.html` |
-| `film.html`, `rec_server.py` | renders the 1080p video in the browser with WebCodecs: run `python3 rec_server.py`, open `http://localhost:8766/film.html`, and it saves `media/handwired-runner.mp4` |
+| `film.html`, `rec_server.py` | renders the 1080p video in the browser with WebCodecs: run `python3 rec_server.py`, open `http://localhost:8766/film.html`, and it saves `media/handwired-runner.mp4`; add `?short` for the 21 s cut |
 | `test.js` | reproduces the results table |
 
 No dependencies beyond Node and a modern browser.

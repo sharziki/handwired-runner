@@ -116,37 +116,61 @@
   }
 
   // ---------- storyboard ----------
+  // ?short renders the ~20 s cut for the tweet; default renders the full 52 s film.
+  const SHORT = location.search.includes("short");
   const frames = [];
   const hold = (n, fn) => { for (let i = 0; i < n; i++) frames.push(((k) => () => fn(k / Math.max(1, n - 1)))(i)); };
-  hold(84, t => card([
-    ["HANDWIRED RUNNER", "small", 46, 0.55],
-    ["I wrote every weight of this", "big", 96],
-    ["neural network by hand.", "big", 96],
-    [`No training. No gradients. ${hand.units.length} neurons, each with a name.`, "small", 56, 0.7],
-  ], t));
-  hold(66, t => card([
-    ["THE OPPONENT", "small", 46, 0.55],
-    ["A PPO agent that trained", "big", 96],
-    [`${STEPS} steps on this exact level.`, "big", 96],
-  ], t));
-  const raceLen = lv => { const st = race(lv); let n = 0; while (!st.over()) { st.tick(); n++; } return Math.ceil(n / TPF) + FPS * 2; };
-  const schedule = (lv, header, sub) => {
-    const st = race(lv), n = raceLen(lv);
-    for (let f = 0; f < n; f++) frames.push(() => { for (let k = 0; k < TPF && !st.over(); k++) st.tick(); drawRace(st, header, sub); });
+  const schedule = (lv, header, sub, tpf, tail) => {
+    const probe = race(lv); let n = 0; while (!probe.over()) { probe.tick(); n++; }
+    const st = race(lv), total = Math.ceil(n / tpf) + tail;
+    for (let f = 0; f < total; f++) frames.push(() => { for (let k = 0; k < tpf && !st.over(); k++) st.tick(); drawRace(st, header, sub); });
   };
-  schedule(R.LEVELS[0], "LEVEL 01", "the RL agent trained here");
-  hold(60, t => card([
-    ["LEVEL 02", "small", 46, 0.55],
-    ["Now a level", "big", 96],
-    ["neither of them has seen.", "big", 96],
-  ], t));
-  schedule(R.LEVELS[1], "LEVEL 02", "unseen by both");
-  hold(150, t => card([
-    ["100 UNSEEN GENERATED LEVELS", "small", 46, 0.55],
-    [`Hand-written   ${genA} / 100`, "big", 104],
-    [`PPO            ${genB} / 100`, "big", 104, 0.55],
-    [`${nzW} weights, 0 training steps  vs  17,156 weights, ${STEPS} steps`, "small", 60, 0.7],
-  ], t));
+  if (SHORT) {
+    const T = 6, SPEED = `${T / TPF}× speed`;
+    hold(72, t => card([
+      ["HANDWIRED RUNNER", "small", 46, 0.55],
+      ["I wrote every weight of a", "big", 96],
+      ["neural network by hand.", "big", 96],
+      [`Then raced it against RL trained for ${STEPS} steps.`, "small", 56, 0.7],
+    ], t));
+    schedule(R.LEVELS[0], "LEVEL 01", `the RL agent trained here · ${SPEED}`, T, 24);
+    hold(36, t => card([
+      ["LEVEL 02", "small", 46, 0.55],
+      ["A level neither has seen.", "big", 96],
+    ], t));
+    schedule(R.LEVELS[1], "LEVEL 02", `unseen by both · ${SPEED}`, T, 36);
+    hold(96, t => card([
+      ["100 UNSEEN GENERATED LEVELS", "small", 46, 0.55],
+      [`Hand-written   ${genA} / 100`, "big", 104],
+      [`PPO            ${genB} / 100`, "big", 104, 0.55],
+      [`${nzW} weights, 0 training  vs  17,156 weights, ${STEPS} steps`, "small", 60, 0.7],
+    ], t));
+  } else {
+    hold(84, t => card([
+      ["HANDWIRED RUNNER", "small", 46, 0.55],
+      ["I wrote every weight of this", "big", 96],
+      ["neural network by hand.", "big", 96],
+      [`No training. No gradients. ${hand.units.length} neurons, each with a name.`, "small", 56, 0.7],
+    ], t));
+    hold(66, t => card([
+      ["THE OPPONENT", "small", 46, 0.55],
+      ["A PPO agent that trained", "big", 96],
+      [`${STEPS} steps on this exact level.`, "big", 96],
+    ], t));
+    schedule(R.LEVELS[0], "LEVEL 01", "the RL agent trained here", TPF, FPS * 2);
+    hold(60, t => card([
+      ["LEVEL 02", "small", 46, 0.55],
+      ["Now a level", "big", 96],
+      ["neither of them has seen.", "big", 96],
+    ], t));
+    schedule(R.LEVELS[1], "LEVEL 02", "unseen by both", TPF, FPS * 2);
+    hold(150, t => card([
+      ["100 UNSEEN GENERATED LEVELS", "small", 46, 0.55],
+      [`Hand-written   ${genA} / 100`, "big", 104],
+      [`PPO            ${genB} / 100`, "big", 104, 0.55],
+      [`${nzW} weights, 0 training steps  vs  17,156 weights, ${STEPS} steps`, "small", 60, 0.7],
+    ], t));
+  }
 
   log(`${frames.length} frames (${(frames.length / FPS).toFixed(1)} s). Hand gen ${genA}/100, PPO gen ${genB}/100. ${location.search.includes("preview") ? "preview" : "encoding…"}`);
   window.FILM = { frames, genA, genB, nzW, STEPS, draw: i => { frameNo = i; frames[i](); } };
@@ -163,7 +187,7 @@
     if (i % 30 === 0) log(`encoding ${i} / ${frames.length}`);
   }
   await enc.flush(); muxer.finalize();
-  const res = await fetch("/save?name=handwired-runner.mp4", { method: "POST", body: muxer.target.buffer });
+  const res = await fetch(`/save?name=${SHORT ? "handwired-runner-short" : "handwired-runner"}.mp4`, { method: "POST", body: muxer.target.buffer });
   log(`done: ${await res.text()} · ${frames.length} frames · hand ${genA}/100 · PPO ${genB}/100`);
   window.FILM.done = true;
 })();
