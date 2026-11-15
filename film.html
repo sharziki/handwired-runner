@@ -1,0 +1,170 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Handwired Runner · film</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>body{margin:0;background:#000;color:#fff;font:13px 'IBM Plex Mono',monospace}canvas{width:960px;max-width:100%;display:block;border-bottom:1px solid #333}#log{padding:8px}</style>
+<canvas id="c" width="1920" height="1080"></canvas>
+<div id="log">loading…</div>
+<script src="runner.js"></script>
+<script src="space.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.js"></script>
+<script>
+(async () => {
+  const R = Runner, S = Space;
+  const log = t => (document.getElementById("log").textContent = t);
+  const PPO = await (await fetch("ppo.json?" + Date.now())).json();
+  const ppoNet = { sizes: PPO.net.sizes, act: "tanh", W: PPO.net.W.map(a => Float32Array.from(a)), b: PPO.net.b.map(a => Float32Array.from(a)) };
+  const hand = R.handNet();
+  const fmtSteps = s => (s >= 1e6 ? (s / 1e6).toFixed(1) + "M" : Math.round(s / 1e3) + "k");
+  const STEPS = fmtSteps(PPO.curve[PPO.curve.length - 1].steps);
+  let nzW = 0; for (const w of hand.net.W) for (const v of w) if (v) nzW++; for (const b of hand.net.b) for (const v of b) if (v) nzW++;
+  let genA = 0, genB = 0; for (let k = 0; k < 100; k++) { const lv = R.genLevel(1001 + k); if (R.playLevel(hand.net, lv).won) genA++; if (R.playLevel(ppoNet, lv).won) genB++; }
+  await Promise.all(["400 20px 'IBM Plex Mono'", "500 20px 'IBM Plex Mono'", "500 40px 'IBM Plex Sans'", "600 40px 'IBM Plex Sans'"].map(f => document.fonts.load(f)));
+
+  const cvs = document.getElementById("c"), ctx = cvs.getContext("2d");
+  const FW = 1920, FH = 1080, FPS = 30, TPF = 2;
+  const MONO = "'IBM Plex Mono', monospace", SANS = "'IBM Plex Sans', sans-serif";
+  const a = v => `rgba(255,255,255,${v})`;
+  const softmax = z => { const m = Math.max(...z); const e = Array.from(z, v => Math.exp(v - m)); const s = e.reduce((x, y) => x + y, 0); return e.map(v => v / s); };
+  const obs = new Float32Array(R.N_IN);
+  function txt(t, x, y, size, alpha = 1, opts = {}) {
+    ctx.font = `${opts.weight || 400} ${size}px ${opts.sans ? SANS : MONO}`; ctx.fillStyle = a(alpha);
+    ctx.textAlign = opts.align || "left"; ctx.textBaseline = opts.base || "alphabetic"; ctx.fillText(t, x, y);
+  }
+
+  function race(level) {
+    const ra = R.newRun(level), rb = R.newRun(level), st = { a: ra, b: rb, actsA: [], probsB: [0.25, 0.25, 0.25, 0.25], phase: 0, actA: 1, actB: 1 };
+    st.think = () => {
+      if (!ra.dead && !ra.won) st.actA = R.argmax(R.forward(hand.net, R.observe(ra, obs), st.actsA));
+      if (!rb.dead && !rb.won) { const z = R.forward(ppoNet, R.observe(rb, obs)); st.probsB = softmax(z); st.actB = R.argmax(z); }
+    };
+    st.think();
+    st.tick = () => { if (st.phase === 0) st.think(); R.physicsTick(ra, st.actA); R.physicsTick(rb, st.actB); st.phase = (st.phase + 1) % R.REPEAT; };
+    st.over = () => (ra.dead || ra.won) && (rb.dead || rb.won);
+    return st;
+  }
+
+  const LX = 0, LW = FW, LH = 470, YA = 66, YB = 66 + LH + 12;
+  function laneOverlay(r, y, title, sub, readout) {
+    txt(title, 40, y + 48, 26, 1, { weight: 500 });
+    txt(sub, 40, y + 80, 18, 0.55);
+    const pct = S.pctOf(r);
+    txt(`${String(pct).padStart(3, "0")}%`, FW - 40, y + 56, 44, 1, { align: "right", weight: 500 });
+    txt(`x ${r.x.toFixed(1).padStart(5, "0")}   t ${(r.t / 60).toFixed(1).padStart(4, "0")}s`, FW - 40, y + 86, 18, 0.55, { align: "right" });
+    // progress rule
+    ctx.fillStyle = a(0.18); ctx.fillRect(0, y + LH - 2, FW, 2); ctx.fillStyle = a(1); ctx.fillRect(0, y + LH - 2, Math.round(FW * pct / 100), 2);
+    ctx.fillStyle = "#000"; ctx.fillRect(0, y + LH - 52, FW, 48); ctx.fillStyle = a(0.25); ctx.fillRect(0, y + LH - 52, FW, 1);
+    readout(y + LH - 20);
+    const st = S.statusOf(r);
+    if (st) {
+      ctx.font = `600 64px ${SANS}`; const w = ctx.measureText(st).width + 80;
+      ctx.fillStyle = "#000"; ctx.fillRect(FW / 2 - w / 2, y + LH / 2 - 56, w, 112);
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(FW / 2 - w / 2 + 1, y + LH / 2 - 55, w - 2, 110);
+      txt(st, FW / 2, y + LH / 2 + 2, 64, 1, { sans: true, weight: 600, align: "center", base: "middle" });
+    }
+  }
+  function neuronReadout(acts) {
+    return y => {
+      const a1 = acts[0] || []; let x = 40;
+      ctx.font = `400 18px ${MONO}`;
+      S.NEURON_SHORT.forEach((n, i) => {
+        const on = a1[i] > 0.05;
+        if (on) { ctx.fillStyle = "#fff"; ctx.fillRect(x, y - 13, 12, 12); } else { ctx.strokeStyle = a(0.5); ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y - 12.5, 11, 11); }
+        txt(n, x + 20, y, 18, on ? 1 : 0.45); x += 20 + ctx.measureText(n).width + 34;
+      });
+    };
+  }
+  function probReadout(probs) {
+    return y => {
+      let x = 40; const best = R.argmax(probs);
+      ["wait", "run", "jump", "back"].forEach((n, i) => {
+        txt(n, x, y, 18, i === best ? 1 : 0.45);
+        const bx = x + 70; ctx.strokeStyle = a(0.5); ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, y - 12.5, 140, 11);
+        ctx.fillStyle = a(i === best ? 1 : 0.5); ctx.fillRect(bx + 2, y - 11, Math.round(137 * probs[i]), 8);
+        txt(probs[i].toFixed(2), bx + 152, y, 18, i === best ? 1 : 0.45); x += 300;
+      });
+    };
+  }
+  let frameNo = 0;
+  function drawRace(st, header, sub) {
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, FW, FH);
+    txt("HANDWIRED RUNNER", 40, 42, 20, 1, { weight: 500 });
+    txt(header, FW / 2, 42, 20, 1, { align: "center", weight: 500 });
+    txt(sub, FW - 40, 42, 20, 0.55, { align: "right" });
+    S.lane(ctx, st.a, { x: LX, y: YA, w: LW, h: LH }, { solid: true, sensor: { acts: st.actsA, units: hand.units }, frame: frameNo });
+    S.lane(ctx, st.b, { x: LX, y: YB, w: LW, h: LH }, { solid: false, frame: frameNo });
+    ctx.fillStyle = a(0.3); ctx.fillRect(0, YA - 1, FW, 1); ctx.fillRect(0, YB - 1, FW, 1); ctx.fillRect(0, YB + LH + 1, FW, 1);
+    laneOverlay(st.a, YA, "A   HAND-WRITTEN NETWORK", `${hand.units.length} neurons · ${nzW} weights · 0 training steps`, neuronReadout(st.actsA));
+    laneOverlay(st.b, YB, "B   PPO AGENT", `64 neurons · 17,156 weights · ${STEPS} training steps on level 01`, probReadout(st.probsB));
+    txt("solid = written by hand      hollow = learned by RL", 40, FH - 18, 18, 0.45);
+    txt("inspired by weight-space programming", FW - 40, FH - 18, 18, 0.45, { align: "right" });
+  }
+  function card(lines, t) {
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, FW, FH);
+    const alpha = Math.min(1, t * 5, (1 - t) * 5 + 0.0001);
+    ctx.globalAlpha = alpha;
+    // thin crosshair frame
+    ctx.strokeStyle = a(0.35); ctx.lineWidth = 1;
+    for (const [x, y, dx, dy] of [[120, 120, 1, 1], [FW - 120, 120, -1, 1], [120, FH - 120, 1, -1], [FW - 120, FH - 120, -1, -1]]) { ctx.beginPath(); ctx.moveTo(x + dx * 40, y + 0.5); ctx.lineTo(x, y + 0.5); ctx.lineTo(x + 0.5, y + dy * 40); ctx.stroke(); }
+    let y = FH / 2 - (lines.reduce((s, l) => s + l[2], 0)) / 2;
+    for (const [t2, kind, h, alphaL = 1] of lines) {
+      y += h;
+      if (kind === "big") txt(t2, 200, y - h * 0.22, h * 0.82, alphaL, { sans: true, weight: 600 });
+      else txt(t2, 200, y - h * 0.3, h * 0.6, alphaL);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- storyboard ----------
+  const frames = [];
+  const hold = (n, fn) => { for (let i = 0; i < n; i++) frames.push(((k) => () => fn(k / Math.max(1, n - 1)))(i)); };
+  hold(84, t => card([
+    ["HANDWIRED RUNNER", "small", 46, 0.55],
+    ["I wrote every weight of this", "big", 96],
+    ["neural network by hand.", "big", 96],
+    [`No training. No gradients. ${hand.units.length} neurons, each with a name.`, "small", 56, 0.7],
+  ], t));
+  hold(66, t => card([
+    ["THE OPPONENT", "small", 46, 0.55],
+    ["A PPO agent that trained", "big", 96],
+    [`${STEPS} steps on this exact level.`, "big", 96],
+  ], t));
+  const raceLen = lv => { const st = race(lv); let n = 0; while (!st.over()) { st.tick(); n++; } return Math.ceil(n / TPF) + FPS * 2; };
+  const schedule = (lv, header, sub) => {
+    const st = race(lv), n = raceLen(lv);
+    for (let f = 0; f < n; f++) frames.push(() => { for (let k = 0; k < TPF && !st.over(); k++) st.tick(); drawRace(st, header, sub); });
+  };
+  schedule(R.LEVELS[0], "LEVEL 01", "the RL agent trained here");
+  hold(60, t => card([
+    ["LEVEL 02", "small", 46, 0.55],
+    ["Now a level", "big", 96],
+    ["neither of them has seen.", "big", 96],
+  ], t));
+  schedule(R.LEVELS[1], "LEVEL 02", "unseen by both");
+  hold(150, t => card([
+    ["100 UNSEEN GENERATED LEVELS", "small", 46, 0.55],
+    [`Hand-written   ${genA} / 100`, "big", 104],
+    [`PPO            ${genB} / 100`, "big", 104, 0.55],
+    [`${nzW} weights, 0 training steps  vs  17,156 weights, ${STEPS} steps`, "small", 60, 0.7],
+  ], t));
+
+  log(`${frames.length} frames (${(frames.length / FPS).toFixed(1)} s). Hand gen ${genA}/100, PPO gen ${genB}/100. ${location.search.includes("preview") ? "preview" : "encoding…"}`);
+  window.FILM = { frames, genA, genB, nzW, STEPS, draw: i => { frameNo = i; frames[i](); } };
+  if (location.search.includes("preview")) return;
+
+  const muxer = new Mp4Muxer.Muxer({ target: new Mp4Muxer.ArrayBufferTarget(), video: { codec: "avc", width: FW, height: FH }, fastStart: "in-memory" });
+  const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: e => log("encoder error " + e) });
+  enc.configure({ codec: "avc1.640028", width: FW, height: FH, bitrate: 10_000_000, framerate: FPS });
+  for (let i = 0; i < frames.length; i++) {
+    frameNo = i; frames[i]();
+    const vf = new VideoFrame(cvs, { timestamp: Math.round((i * 1e6) / FPS), duration: Math.round(1e6 / FPS) });
+    enc.encode(vf, { keyFrame: i % (FPS * 2) === 0 }); vf.close();
+    while (enc.encodeQueueSize > 8) await new Promise(r => setTimeout(r, 0));
+    if (i % 30 === 0) log(`encoding ${i} / ${frames.length}`);
+  }
+  await enc.flush(); muxer.finalize();
+  const res = await fetch("/save?name=handwired-runner.mp4", { method: "POST", body: muxer.target.buffer });
+  log(`done: ${await res.text()} · ${frames.length} frames · hand ${genA}/100 · PPO ${genB}/100`);
+  window.FILM.done = true;
+})();
+</script>
